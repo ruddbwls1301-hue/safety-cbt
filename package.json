@@ -1,0 +1,32 @@
+{
+  "name": "industrial-safety-cbt",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "build:candidate": "tsc -b && VITE_CBT_LOCAL_SERVER=true vite build --outDir dist-candidate --emptyOutDir",
+    "preview:candidate": "vite preview --outDir dist-candidate --strictPort",
+    "build:pages": "tsc -b && VITE_CBT_LOCAL_SERVER=false VITE_CBT_ENABLE_SW=false vite build --outDir dist-pages --emptyOutDir",
+    "build:mobile": "tsc -b && VITE_CBT_LOCAL_SERVER=false VITE_CBT_ENABLE_SW=true vite build --outDir dist-mobile --emptyOutDir"
+  },
+  "dependencies": {
+    "@tesseract.js-data/kor": "1.0.0",
+    "pdfjs-dist": "6.4.299",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "fake-indexeddb": "6.2.4",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "4.0.14"
+  }
+}

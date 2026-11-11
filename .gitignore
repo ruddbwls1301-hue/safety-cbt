@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-candidate/
+.DS_Store
+*.log
+*.tsbuildinfo
+
+# Local source materials and scratch work must never be published
+work/
+.local-book-data/
+*.zip
+# Private verification screenshots contain textbook questions
+outputs/book-registration.jpg
+outputs/cbt-start-verified.jpg
+outputs/safari-cbt-ready.jpg
+outputs/practice-feedback-mobile.jpg
+
+# Separate mobile deployment artifacts
+dist-mobile/
+dist-pages/

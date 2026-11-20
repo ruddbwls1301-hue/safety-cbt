@@ -120,6 +120,7 @@ export function proposeCorrection(group: CorrectionGroup): Question {
   if (next.book) {
     const review = { ...next.book.review };
     delete review.automatic;
+    delete review.ai;
     if (contentChanged) { review.sourceCompared = false; review.flagsChecked = false; }
     if (explanationChanged) review.explanationChecked = false;
     next.book = { ...next.book, review };

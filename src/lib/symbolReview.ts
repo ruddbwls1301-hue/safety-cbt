@@ -69,7 +69,7 @@ export function symbolHints(question: Pick<Question, 'prompt' | 'choices' | 'exp
 /** True when a person has compared this content with the source since it was last changed. */
 export function isHumanCompared(question: Question): boolean {
   if (question.status !== 'verified') return false;
-  return question.book ? question.book.review?.sourceCompared === true && !question.book.review.automatic : true;
+  return question.book ? question.book.review?.sourceCompared === true && !question.book.review.automatic && !question.book.review.ai : true;
 }
 
 /** Bank/review-queue filter: hinted content that no person has compared yet. */

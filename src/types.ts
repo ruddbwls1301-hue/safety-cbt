@@ -47,6 +47,8 @@ export type BookQuestionMetadata = {
     explanationChecked: boolean;
     examImageSafe: boolean;
     automatic?: { checkedAt: string; method: 'structure-v1'; archiveHash: string; explanationUnavailable?: true };
+    /** AI comparison of the stored text with the source image. Kept apart from a person's approval; any edit clears it. */
+    ai?: { checkedAt: string; method: 'source-image-v1'; contentKey: string; correctionCount: number };
   };
   issues: string[];
   rawRecord: Record<string, unknown>;

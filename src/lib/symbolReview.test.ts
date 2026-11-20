@@ -111,4 +111,18 @@ describe('review status', () => {
     expect(isHumanCompared(manual)).toBe(true);
     expect(needsSymbolReview(manual)).toBe(false);
   });
+  it('accepts an AI source-image comparison as a separate approval that any edit voids', async () => {
+    const { bookContentKey, hasValidAiReview, AI_REVIEW_METHOD } = await import('./bookData');
+    const [converted] = convertBookData({ questions: [bookRow()] });
+    const corrected: Question = { ...converted, status: 'verified', choices: ['□ : 지체', '▽ : 저장', '⇒ : 운반', '○ : 가공'] };
+    corrected.book = { ...corrected.book!, review: { ...corrected.book!.review, ai: { checkedAt: '2026-11-20T00:00:00.000Z', method: AI_REVIEW_METHOD, contentKey: bookContentKey(corrected), correctionCount: 4 } } };
+    expect(hasValidAiReview(corrected)).toBe(true);
+    expect(isBookQuestionEligible(corrected, [corrected])).toBe(true);
+    expect(isHumanCompared(corrected)).toBe(false);
+    const edited: Question = { ...corrected, explanation: corrected.explanation + ' 수정' };
+    expect(hasValidAiReview(edited)).toBe(false);
+    expect(isBookQuestionEligible(edited, [edited])).toBe(false);
+    const pending: Question = { ...corrected, status: 'pending' };
+    expect(isBookQuestionEligible(pending, [pending])).toBe(false);
+  });
 });

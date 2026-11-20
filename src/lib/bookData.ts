@@ -282,6 +282,22 @@ export function automaticBookApprovalIssues(question: Question, allQuestions: Qu
   return [...new Set(issues)];
 }
 
+export const AI_REVIEW_METHOD = 'source-image-v1' as const;
+
+/** Stable fingerprint of what an AI comparison covered; a later change to any of it voids that comparison. */
+export function bookContentKey(question: Question): string {
+  const text = JSON.stringify([question.prompt, question.choices, question.answer, question.explanation, question.book?.examImageId ?? null, question.book?.explanationRef ?? null]);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index++) { hash ^= text.charCodeAt(index); hash = Math.imul(hash, 0x01000193) >>> 0; }
+  return `fnv1a32:${hash.toString(16).padStart(8, '0')}:${text.length}`;
+}
+
+export function hasValidAiReview(question: Question): boolean {
+  const ai = question.book?.review?.ai;
+  return Boolean(ai && ai.method === AI_REVIEW_METHOD && typeof ai.checkedAt === 'string' && Number.isFinite(Date.parse(ai.checkedAt))
+    && ai.contentKey === bookContentKey(question));
+}
+
 function hasValidAutomaticReview(question: Question, allQuestions: Question[]): boolean {
   const automatic = question.book?.review?.automatic;
   return Boolean(automatic && automatic.method === 'structure-v1' && typeof automatic.archiveHash === 'string'
@@ -291,7 +307,7 @@ function hasValidAutomaticReview(question: Question, allQuestions: Question[]): 
 }
 
 export function bookApprovalIssues(question: Question, allQuestions: Question[]): string[] {
-  return bookApprovalIssuesFor(question, allQuestions, !hasValidAutomaticReview(question, allQuestions));
+  return bookApprovalIssuesFor(question, allQuestions, !hasValidAiReview(question) && !hasValidAutomaticReview(question, allQuestions));
 }
 
 export type AutomaticBookApprovalResult = {

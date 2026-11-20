@@ -4,7 +4,9 @@ import type { Question } from '../types';
  * Correction proposals prepared outside the app (compared with the source image by a reviewer).
  * A proposal never changes saved data by itself: a person opens it next to the source image and saves or approves it.
  */
-export type CorrectionField = 'prompt' | 'choice' | 'explanation' | 'answer';
+export type CorrectionField = 'prompt' | 'choice' | 'explanation' | 'answer' | 'examImage';
+/** `examImage` proposes the archive's question-only image (problem, figure and choices; no answer) for the exam screen. */
+export const EXAM_IMAGE_CANDIDATE = 'candidate';
 export type CorrectionItem = {
   questionId: string;
   originalId?: string;
@@ -26,7 +28,7 @@ export type CorrectionGroup = {
   state: CorrectionState | 'missing';
 };
 
-const FIELD_LABEL: Record<CorrectionField, string> = { prompt: '문제 지문', choice: '보기', explanation: '해설', answer: '정답 번호' };
+const FIELD_LABEL: Record<CorrectionField, string> = { prompt: '문제 지문', choice: '보기', explanation: '해설', answer: '정답 번호', examImage: '시험용 이미지(그림 포함)' };
 export function correctionLabel(item: CorrectionItem): string {
   return item.field === 'choice' ? `보기 ${(item.index ?? 0) + 1}` : FIELD_LABEL[item.field];
 }
@@ -39,10 +41,12 @@ export function parseCorrectionFile(value: unknown): CorrectionFile {
     const item = raw as Partial<CorrectionItem> | null;
     const fail = (reason: string): never => { throw new Error(`${position + 1}번째 교정안: ${reason}`); };
     if (!item || typeof item !== 'object' || typeof item.questionId !== 'string' || !item.questionId) return fail('문항 ID가 없습니다.');
-    if (!['prompt', 'choice', 'explanation', 'answer'].includes(String(item.field))) return fail('수정 대상 항목을 알 수 없습니다.');
+    if (!['prompt', 'choice', 'explanation', 'answer', 'examImage'].includes(String(item.field))) return fail('수정 대상 항목을 알 수 없습니다.');
     const field = item.field as CorrectionField;
     if (field === 'choice' && (!Number.isInteger(item.index) || item.index! < 0 || item.index! > 3)) return fail('보기 위치는 0~3이어야 합니다.');
-    if (field === 'answer') {
+    if (field === 'examImage') {
+      if (item.after !== EXAM_IMAGE_CANDIDATE || item.before !== null) return fail('시험용 이미지 교정안은 before: null, after: "candidate" 형식이어야 합니다.');
+    } else if (field === 'answer') {
       if (!Number.isInteger(item.after) || (item.after as number) < 1 || (item.after as number) > 4) return fail('정답 번호는 1~4여야 합니다.');
       if (item.before !== null && !Number.isInteger(item.before)) return fail('기존 정답 번호 형식을 확인해 주세요.');
     } else if (typeof item.before !== 'string' || typeof item.after !== 'string') return fail('수정 전·후 내용은 문자열이어야 합니다.');
@@ -60,6 +64,8 @@ export function parseCorrectionFile(value: unknown): CorrectionFile {
 }
 
 function currentValue(question: Question, item: CorrectionItem): string | number | null {
+  // Any exam image already linked (by a person or an earlier proposal) counts as handled; never replaced automatically.
+  if (item.field === 'examImage') return question.book?.examImageId ? EXAM_IMAGE_CANDIDATE : null;
   if (item.field === 'choice') return question.choices[item.index ?? 0] ?? '';
   if (item.field === 'answer') return question.answer;
   return question[item.field];
@@ -77,6 +83,7 @@ export function groupCorrections(file: CorrectionFile, questions: Question[]): C
       groups.set(item.questionId, group);
     }
     if (!group.question) continue;
+    if (item.field === 'examImage' && !group.question.book?.sourceQuestionImageId) { group.items.push({ item, state: 'conflict', current: null }); continue; }
     const current = currentValue(group.question, item);
     const state: CorrectionState = current === item.after ? 'applied' : current === item.before ? 'ready' : 'conflict';
     group.items.push({ item, state, current });
@@ -92,6 +99,10 @@ export function groupCorrections(file: CorrectionFile, questions: Question[]): C
  * Builds the proposed question for the review editor. Same ID; the content change returns it to pending
  * and clears the source-comparison marks, exactly like typing the change by hand.
  */
+export function wantsCandidateExamImage(group: CorrectionGroup): boolean {
+  return group.items.some(({ item, state }) => item.field === 'examImage' && state === 'ready');
+}
+
 export function proposeCorrection(group: CorrectionGroup): Question {
   if (!group.question) throw new Error('문제은행에 없는 문항입니다.');
   if (group.state !== 'ready') throw new Error('반영할 수 있는 교정안이 없습니다.');
@@ -102,6 +113,7 @@ export function proposeCorrection(group: CorrectionGroup): Question {
     if (item.field === 'choice') { next.choices[item.index ?? 0] = item.after as string; contentChanged = true; }
     else if (item.field === 'answer') { next.answer = item.after as number; contentChanged = true; }
     else if (item.field === 'prompt') { next.prompt = item.after as string; contentChanged = true; }
+    else if (item.field === 'examImage') continue; // Linked by the review editor, which copies the stored image.
     else { next.explanation = item.after as string; explanationChanged = true; }
   }
   next.status = 'pending';

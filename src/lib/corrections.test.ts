@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { correctionLabel, groupCorrections, parseCorrectionFile, proposeCorrection, type CorrectionFile } from './corrections';
+import { correctionLabel, groupCorrections, parseCorrectionFile, proposeCorrection, wantsCandidateExamImage, type CorrectionFile } from './corrections';
 import { autoApproveBookQuestions, convertBookData, isBookQuestionEligible } from './bookData';
 import type { Question } from '../types';
 
@@ -79,5 +79,35 @@ describe('correction proposals', () => {
     const [group] = groupCorrections(file(question), [partly]);
     expect(group.items.map((entry) => entry.state)).toEqual(['applied', 'ready', 'ready']);
     expect(proposeCorrection(group).choices).toEqual(['□ : 지체', 'V : 저장', '⇒: 운반', '0: 가공']);
+  });
+  it('proposes the archive question image without touching text, review marks or the stored link', () => {
+    const question = autoApproved();
+    question.book!.sourceQuestionImageId = 'unit-candidate-image';
+    question.book!.review = { ...question.book!.review, sourceCompared: true };
+    const file = parseCorrectionFile({ kind: 'cbt-corrections', version: 1, items: [{ questionId: question.id, field: 'examImage', before: null, after: 'candidate', note: '그림 누락' }] });
+    const [group] = groupCorrections(file, [question]);
+    expect(group.state).toBe('ready');
+    expect(wantsCandidateExamImage(group)).toBe(true);
+    expect(correctionLabel(file.items[0])).toBe('시험용 이미지(그림 포함)');
+    const proposed = proposeCorrection(group);
+    expect(proposed.prompt).toBe(question.prompt);
+    expect(proposed.choices).toEqual(question.choices);
+    expect(proposed.book!.examImageId).toBeUndefined();
+    expect(proposed.book!.review.sourceCompared).toBe(true);
+    expect(proposed.book!.review.automatic).toBeUndefined();
+    expect(proposed.status).toBe('pending');
+  });
+  it('treats a linked exam image as handled and refuses questions without an archive image', () => {
+    const question = autoApproved();
+    const file = parseCorrectionFile({ kind: 'cbt-corrections', version: 1, items: [{ questionId: question.id, field: 'examImage', before: null, after: 'candidate' }] });
+    expect(groupCorrections(file, [question])[0].state).toBe('conflict');
+    question.book!.sourceQuestionImageId = 'unit-candidate-image';
+    question.book!.examImageId = 'unit-candidate-image:exam:1';
+    const [group] = groupCorrections(file, [question]);
+    expect(group.state).toBe('applied');
+    expect(wantsCandidateExamImage(group)).toBe(false);
+  });
+  it('rejects malformed exam image proposals', () => {
+    expect(() => parseCorrectionFile({ kind: 'cbt-corrections', version: 1, items: [{ questionId: 'a', field: 'examImage', before: null, after: 'images/x.jpg' }] })).toThrow('시험용 이미지');
   });
 });

@@ -11,7 +11,7 @@ import { SymbolHintList, SymbolPalette } from './SymbolPalette';
 
 export type ProposalNote = { label: string; before: string; after: string; note?: string };
 
-export default function BookReviewEditor({ question, questions, onClose, onSave, onApprove, proposal, proposalNotes }: { question: Question; questions: Question[]; proposal?: Question; proposalNotes?: ProposalNote[]; onClose: () => void; onSave: (question: Question) => Promise<void>; onApprove: (question: Question) => Promise<void> }) {
+export default function BookReviewEditor({ question, questions, onClose, onSave, onApprove, proposal, proposalNotes, proposeCandidateImage = false }: { question: Question; questions: Question[]; proposal?: Question; proposeCandidateImage?: boolean; proposalNotes?: ProposalNote[]; onClose: () => void; onSave: (question: Question) => Promise<void>; onApprove: (question: Question) => Promise<void> }) {
   const [edited, setEdited] = useState<Question>(() => structuredClone(proposal ?? question));
   const [fullUrl, setFullUrl] = useState('');
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -77,6 +77,13 @@ export default function BookReviewEditor({ question, questions, onClose, onSave,
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
+  // An image proposal links the archive's question-only image once both images are visible; the person still confirms it is answer-free.
+  const candidateProposed = useRef(false);
+  useEffect(() => {
+    if (!proposeCandidateImage || candidateProposed.current || !candidateImageLoaded || !imageLoaded || book.examImageId) return;
+    candidateProposed.current = true;
+    void useCandidateImage();
+  }, [proposeCandidateImage, candidateImageLoaded, imageLoaded, book.examImageId]);
   async function useCandidateImage() {
     if (!book.sourceQuestionImageId || !candidateImageLoaded) return;
     setBusy(true); setError('');

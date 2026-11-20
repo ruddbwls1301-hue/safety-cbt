@@ -12,7 +12,7 @@ import { BookExamImage, BookStoredImage, bookExplanationText } from './BookImage
 import { ReadableQuestion } from './ReadableQuestion';
 import { ExplanationText } from './ExplanationText';
 import { needsSymbolReview, symbolHints } from './lib/symbolReview';
-import { correctionLabel, proposeCorrection, type CorrectionFile, type CorrectionGroup } from './lib/corrections';
+import { correctionLabel, proposeCorrection, wantsCandidateExamImage, type CorrectionFile, type CorrectionGroup } from './lib/corrections';
 import type { ProposalNote } from './BookReviewEditor';
 import { SymbolHintList, SymbolPalette } from './SymbolPalette';
 import PhoneConnect from './PhoneConnect';
@@ -143,7 +143,7 @@ export default function App() {
   const [bankSubjectFilter, setBankSubjectFilter] = useState('all');
   const [bankSymbolOnly, setBankSymbolOnly] = useState(false);
   const [correctionFile, setCorrectionFile] = useState<CorrectionFile | null>(null);
-  const [proposal, setProposal] = useState<{ question: Question; notes: ProposalNote[] } | null>(null);
+  const [proposal, setProposal] = useState<{ question: Question; notes: ProposalNote[]; useCandidate: boolean } | null>(null);
   // A proposal lives only while its editor is open; it never re-applies on a later open.
   useEffect(() => { if (!showEditor) setProposal(null); }, [showEditor]);
   const [setupMode, setSetupMode] = useState<SessionMode>('random');
@@ -473,8 +473,8 @@ export default function App() {
     if (!group.question) return;
     try {
       const proposed = proposeCorrection(group);
-      const notes = group.items.filter((entry) => entry.state === 'ready').map(({ item }) => ({ label: correctionLabel(item), before: item.field === 'answer' ? `${item.before ?? '없음'}번` : String(item.before), after: item.field === 'answer' ? `${item.after}번` : String(item.after), note: item.note }));
-      if (group.question.book) { setProposal({ question: proposed, notes }); setShowEditor(group.question); }
+      const notes = group.items.filter((entry) => entry.state === 'ready').map(({ item }) => ({ label: correctionLabel(item), before: item.field === 'answer' ? `${item.before ?? '없음'}번` : item.field === 'examImage' ? '없음' : String(item.before), after: item.field === 'answer' ? `${item.after}번` : item.field === 'examImage' ? 'ZIP 문제용 이미지 연결(정답 미노출 확인 필요)' : String(item.after), note: item.note }));
+      if (group.question.book) { setProposal({ question: proposed, notes, useCandidate: wantsCandidateExamImage(group) }); setShowEditor(group.question); }
       // Non-book questions use the plain editor, which always saves as pending.
       else setShowEditor(proposed);
     } catch (reason) { setNotice(reason instanceof Error ? reason.message : String(reason)); }
@@ -653,7 +653,7 @@ export default function App() {
     </main>
 
     {view !== 'cbt' && <MobileNavigation view={view} onNavigate={go}/>}
-    {showEditor && showEditor !== 'new' && showEditor.book ? <Suspense fallback={<div className="modal-backdrop">검수 화면을 불러오는 중...</div>}><BookReviewEditor key={`${showEditor.id}:${proposal?.question.id === showEditor.id ? 'proposal' : 'saved'}`} question={showEditor} questions={questions} proposal={proposal?.question.id === showEditor.id ? proposal.question : undefined} proposalNotes={proposal?.question.id === showEditor.id ? proposal.notes : undefined} onClose={() => setShowEditor(null)} onSave={saveEditedQuestion} onApprove={approveBookQuestion}/></Suspense> : showEditor && <QuestionEditor key={showEditor === 'new' ? 'new' : showEditor.id} question={showEditor === 'new' ? undefined : showEditor} onClose={() => setShowEditor(null)} onSave={saveEditedQuestion} />}
+    {showEditor && showEditor !== 'new' && showEditor.book ? <Suspense fallback={<div className="modal-backdrop">검수 화면을 불러오는 중...</div>}><BookReviewEditor key={`${showEditor.id}:${proposal?.question.id === showEditor.id ? 'proposal' : 'saved'}`} question={showEditor} questions={questions} proposal={proposal?.question.id === showEditor.id ? proposal.question : undefined} proposalNotes={proposal?.question.id === showEditor.id ? proposal.notes : undefined} proposeCandidateImage={proposal?.question.id === showEditor.id && proposal.useCandidate} onClose={() => setShowEditor(null)} onSave={saveEditedQuestion} onApprove={approveBookQuestion}/></Suspense> : showEditor && <QuestionEditor key={showEditor === 'new' ? 'new' : showEditor.id} question={showEditor === 'new' ? undefined : showEditor} onClose={() => setShowEditor(null)} onSave={saveEditedQuestion} />}
   </div>;
 }
 

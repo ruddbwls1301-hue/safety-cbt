@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { latestReviewItems, latestWrongIds, QuestionCollection, scoreAttempt } from '../App';
+import { reviewQueue } from './reviewQueue';
 import { getQuestions, getUserData, saveUserData } from './db';
 import type { Attempt, Question, UserData } from '../types';
 
@@ -61,17 +62,23 @@ describe('wrong and unanswered review states', () => {
     const newest = attempt({ [questions[0].id]: 2 }, { id: 'new', questionIds: [questions[0].id, questions[1].id] });
     const before = structuredClone([newest, old]);
     const reviews = latestReviewItems([newest, old], questions);
-    expect(reviews).not.toContainEqual(expect.objectContaining({ questionId: questions[0].id }));
+    // One correct answer after a wrong one is not enough to leave the list (two in a row are needed).
+    expect(reviews.find((r) => r.questionId === questions[0].id)?.state).toBe('wrong');
+    expect(reviewQueue([newest, old], questions).find((r) => r.questionId === questions[0].id)?.correctStreak).toBe(1);
     expect(reviews.find((r) => r.questionId === questions[1].id)?.state).toBe('unanswered');
-    expect(reviews.filter((r) => r.state === 'wrong')).toHaveLength(18);
-    expect(new Set(reviews.map((r) => r.questionId)).size).toBe(19);
+    expect(reviews.filter((r) => r.state === 'wrong')).toHaveLength(19);
+    expect(new Set(reviews.map((r) => r.questionId)).size).toBe(20);
     expect(latestReviewItems([old, newest], questions)).toEqual(reviews);
     expect([newest, old]).toEqual(before);
   });
   it('keeps the newest-first history order for identical submission timestamps', () => {
     const older = attempt(allAnswers(1), { id: 'older' });
     const newer = attempt(allAnswers(2), { id: 'newer' });
-    expect(latestReviewItems([newer, older], questions)).toEqual([]);
+    // newer (index 0) is processed after older: wrong then correct → still queued with a streak of 1.
+    expect(reviewQueue([newer, older], questions).every((r) => r.correctStreak === 1)).toBe(true);
+    expect(reviewQueue([newer, older], questions)).toHaveLength(20);
+    // Swapping the stored order flips which one counts as newer: correct then wrong → queued with no streak.
+    expect(reviewQueue([older, newer], questions).every((r) => r.correctStreak === 0 && r.state === 'wrong')).toBe(true);
   });
   it('deduplicates stored question IDs and ignores answers outside the submitted selection', () => {
     const entry = attempt({ [questions[1].id]: 1 }, { questionIds: [questions[0].id, questions[0].id, 'missing-bank-id'] });

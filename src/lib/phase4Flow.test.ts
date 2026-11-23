@@ -44,11 +44,13 @@ describe('Phase 4 grading and wrong-note regression',()=>{
     expect(scoreAttempt(attempt(list,120,{mode:'book-round',feedbackEnabled:false}),bank).fullExam).toBe(false);
     expect(scoreAttempt(attempt(list,120,{feedbackEnabled:true}),bank).fullExam).toBe(false);
   });
-  it('uses the latest submitted response when removing a corrected wrong answer',()=>{
+  it('removes a corrected wrong answer only after two correct submissions in a row',()=>{
     const old=attempt(bank.slice(0,2),0,{id:'old',submittedAt:'2026-10-11T00:00:00Z'});
-    const newer=attempt(bank.slice(0,1),1,{id:'new'});
-    expect(latestWrongIds([newer,old],bank)).toEqual([bank[1].id]);
-    expect(latestWrongIds([old,newer],bank)).toEqual([bank[1].id]);
+    const newer=attempt(bank.slice(0,1),1,{id:'new',submittedAt:'2026-10-12T00:00:00Z'});
+    const newest=attempt(bank.slice(0,1),1,{id:'newest',submittedAt:'2026-10-13T00:00:00Z'});
+    expect(latestWrongIds([newer,old],bank)).toEqual([bank[0].id,bank[1].id]);
+    expect(latestWrongIds([old,newer],bank)).toEqual([bank[0].id,bank[1].id]);
+    expect(latestWrongIds([newest,newer,old],bank)).toEqual([bank[1].id]);
     expect(old.answers[bank[0].id]).toBe(1);
   });
 });

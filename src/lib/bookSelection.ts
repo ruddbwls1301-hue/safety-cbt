@@ -141,3 +141,20 @@ export function selectSubjectSet(pool: readonly Question[], order: Exclude<Subje
   }
   return unique.slice(0, PRACTICE_BATCH_SIZE);
 }
+
+/** Book frequency filter for subject practice. Frequency = times the question appeared in past exams (book ★×10 + ☆). */
+export type FrequencyFilter = 'all' | 'frequent' | 'rare';
+export const FREQUENT_MIN_COUNT = 3;
+export const FREQUENCY_FILTERS: readonly { id: FrequencyFilter; label: string; description: string }[] = [
+  { id: 'all', label: '전체', description: '출제 빈도와 관계없이' },
+  { id: 'frequent', label: `${FREQUENT_MIN_COUNT}회 이상 빈출`, description: `책 기준 ${FREQUENT_MIN_COUNT}번 이상 출제된 문항` },
+  { id: 'rare', label: `${FREQUENT_MIN_COUNT}회 미만`, description: `${FREQUENT_MIN_COUNT}번 미만으로 출제된 문항` },
+];
+
+/** Questions without a recorded frequency (user-added, exam rounds) match only "all"; nothing is guessed. */
+export function matchesFrequency(question: Question, filter: FrequencyFilter): boolean {
+  if (filter === 'all') return true;
+  const frequency = question.book?.frequency;
+  if (typeof frequency !== 'number' || !Number.isFinite(frequency)) return false;
+  return filter === 'frequent' ? frequency >= FREQUENT_MIN_COUNT : frequency < FREQUENT_MIN_COUNT;
+}

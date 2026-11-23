@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, lazy, Suspense, useEffect, useMemo, useRef, use
 import { clearPdfImports, deleteQuestion, getBookImage, getQuestions, getUserData, saveQuestion, saveQuestions, saveUserData } from './lib/db';
 import { canonicalSubjectLabel, makeId, normalizePrompt, parseQuestionBackup, parseQuestionImport, subjectFor } from './lib/questions';
 import { bookApprovalIssues, isBookQuestionEligible } from './lib/bookData';
-import { BOOK_EXAM_ROUNDS, bookRoundKey, bookRoundLabel, selectBookRound, selectPracticePool, PRACTICE_BATCH_SIZE, practiceBatchCount, selectPracticeBatch, selectSubjectSet, SUBJECT_SET_ORDERS, type SubjectSetOrder } from './lib/bookSelection';
+import { FREQUENCY_FILTERS, matchesFrequency, type FrequencyFilter, BOOK_EXAM_ROUNDS, bookRoundKey, bookRoundLabel, selectBookRound, selectPracticePool, PRACTICE_BATCH_SIZE, practiceBatchCount, selectPracticeBatch, selectSubjectSet, SUBJECT_SET_ORDERS, type SubjectSetOrder } from './lib/bookSelection';
 import { READING_SCALES, readReadingScale, saveReadingScale, type ReadingScale } from './lib/readingPrefs';
 import { resolveCbtShortcut, shortcutTargetKind } from './lib/cbtShortcuts';
 import { assignPracticeAnswer, checkPracticeAnswer, supportsPracticeFeedback } from './lib/practiceFeedback';
@@ -140,6 +140,7 @@ export default function App() {
   const [setupSubject, setSetupSubject] = useState(SUBJECTS.legacy[0]);
   const [setupBatch, setSetupBatch] = useState(0);
   const [setupOrder, setSetupOrder] = useState<SubjectSetOrder>('random');
+  const [setupFrequency, setSetupFrequency] = useState<FrequencyFilter>('all');
   const [readingScale, setReadingScale] = useState<ReadingScale>(readReadingScale);
   const [setupYear, setSetupYear] = useState('all');
   const [setupRound, setSetupRound] = useState('');
@@ -208,19 +209,20 @@ export default function App() {
   const reviewStates = useMemo(() => new Map(reviewItems.map((item) => [item.questionId, item.state])), [reviewItems]);
   const setupPool = useMemo(() => setupMode === 'book-round' ? selectBookRound(questions, setupBookRound) : selectPracticePool(questions, {
     scheme, mode: setupMode, subject: setupSubject, year: setupYear, round: setupRound, wrongIds: reviewIds, bookmarkedIds: user.bookmarks,
-  }), [questions, scheme, setupMode, setupSubject, setupYear, setupRound, setupBookRound, reviewIds, user.bookmarks]);
-  useEffect(() => { setSetupBatch(0); }, [scheme, setupMode, setupSubject, setupYear, setupRound, setupBookRound]);
+  }).filter((question) => setupMode !== 'subject' || matchesFrequency(question, setupFrequency)), [questions, scheme, setupMode, setupSubject, setupYear, setupRound, setupBookRound, reviewIds, user.bookmarks, setupFrequency]);
+  useEffect(() => { setSetupBatch(0); }, [scheme, setupMode, setupSubject, setupYear, setupRound, setupBookRound, setupFrequency]);
   const setupBatchQuestions = useMemo(() => selectPracticeBatch(setupPool, setupBatch), [setupPool, setupBatch]);
   const subjectSetMode = setupMode === 'subject' && setupOrder !== 'book';
   const subjectCounts = useMemo(() => {
     const counts = new Map<string, number>();
     if (setupMode !== 'subject') return counts;
     for (const question of selectPracticePool(questions, { scheme, mode: 'random' })) {
+      if (!matchesFrequency(question, setupFrequency)) continue;
       const subject = subjectFor(question, scheme);
       if (subject) counts.set(subject, (counts.get(subject) ?? 0) + 1);
     }
     return counts;
-  }, [questions, scheme, setupMode]);
+  }, [questions, scheme, setupMode, setupFrequency]);
   const recentAttempt = user.attempts[0];
   const stats = useMemo(() => {
     const answeredIds = new Set<string>();
@@ -312,9 +314,11 @@ export default function App() {
       return;
     }
     let pool = selectPracticePool(questions, { scheme, mode, official, subject: setupSubject, year: setupYear, round: setupRound, wrongIds: reviewIds, bookmarkedIds: user.bookmarks });
+    if (mode === 'subject' && !official) pool = pool.filter((question) => matchesFrequency(question, setupFrequency));
+    const frequencyLabel = mode === 'subject' && setupFrequency !== 'all' ? ` · ${FREQUENCY_FILTERS.find((item) => item.id === setupFrequency)!.label}` : '';
     let title = '랜덤 모의풀이';
     if (mode === 'subject') {
-      title = `${setupSubject} 연습`;
+      title = `${setupSubject}${frequencyLabel} 연습`;
     } else if (mode === 'round') {
       title = `${setupYear === 'all' ? scheme === 'legacy' ? '2024–2026' : '2027–2029' : setupYear} 기출 회차`;
     } else if (mode === 'wrong') {
@@ -339,11 +343,11 @@ export default function App() {
     if (mode === 'subject' && setupOrder !== 'book') {
       const subjectSet = selectSubjectSet(pool, setupOrder, { attempts: user.attempts, reviewStates });
       if (subjectSet.length === 0) {
-        setNotice('선택한 과목에 출제 가능한 검수 완료 문제가 없습니다. 문제은행의 검수 상태를 확인해 주세요.');
+        setNotice(setupFrequency === 'all' ? '선택한 과목에 출제 가능한 검수 완료 문제가 없습니다. 문제은행의 검수 상태를 확인해 주세요.' : '선택한 과목에 이 출제 빈도 조건을 만족하는 검수 완료 문제가 없습니다.');
         return;
       }
       const orderLabel = SUBJECT_SET_ORDERS.find((order) => order.id === setupOrder)?.label ?? '';
-      void beginSession(subjectSet, scheme, mode, `${setupSubject} · ${orderLabel} ${subjectSet.length}문항`, Math.max(10, subjectSet.length));
+      void beginSession(subjectSet, scheme, mode, `${setupSubject}${frequencyLabel} · ${orderLabel} ${subjectSet.length}문항`, Math.max(10, subjectSet.length));
       return;
     }
     if (mode === 'random') {
@@ -618,7 +622,7 @@ export default function App() {
                   ['bookmarked', '북마크 문제', '저장해둔 문제를 모아 풀기', 'bookmark'],
                 ] as [SessionMode, string, string, string][]).map(([id, title, desc, icon]) => <button key={id} className={`mode-card ${setupMode === id ? 'selected' : ''}`} onClick={() => setSetupMode(id)}><span className="mode-icon"><Icon name={icon}/></span><span className="mode-copy"><strong>{title}</strong><small>{desc}</small></span><span className="radio-dot"/></button>)}
               </div>
-              {setupMode === 'subject' && <div className="subject-set-settings"><fieldset className="subject-set-group"><legend>과목 선택</legend><div className="subject-set-options">{SUBJECTS[scheme].map((subject, index) => <button type="button" key={subject} className={`subject-set-option ${setupSubject === subject ? 'selected' : ''}`} aria-pressed={setupSubject === subject} onClick={() => setSetupSubject(subject)}><span className="subject-set-no">{index + 1}과목</span><strong>{subject}</strong><small>출제 가능 {(subjectCounts.get(subject) ?? 0).toLocaleString()}문항</small></button>)}</div></fieldset><fieldset className="subject-set-group"><legend>출제 방식</legend><div className="subject-order-options">{SUBJECT_SET_ORDERS.map((order) => <button type="button" key={order.id} className={`subject-order-option ${setupOrder === order.id ? 'selected' : ''}`} aria-pressed={setupOrder === order.id} onClick={() => setSetupOrder(order.id)}><strong>{order.label}</strong><small>{order.description}</small></button>)}</div></fieldset></div>}
+              {setupMode === 'subject' && <div className="subject-set-settings"><fieldset className="subject-set-group"><legend>과목 선택</legend><div className="subject-set-options">{SUBJECTS[scheme].map((subject, index) => <button type="button" key={subject} className={`subject-set-option ${setupSubject === subject ? 'selected' : ''}`} aria-pressed={setupSubject === subject} onClick={() => setSetupSubject(subject)}><span className="subject-set-no">{index + 1}과목</span><strong>{subject}</strong><small>출제 가능 {(subjectCounts.get(subject) ?? 0).toLocaleString()}문항</small></button>)}</div></fieldset><fieldset className="subject-set-group"><legend>출제 빈도</legend><div className="subject-order-options frequency-options">{FREQUENCY_FILTERS.map((item) => <button type="button" key={item.id} className={`subject-order-option ${setupFrequency === item.id ? 'selected' : ''}`} aria-pressed={setupFrequency === item.id} onClick={() => setSetupFrequency(item.id)}><strong>{item.label}</strong><small>{item.description}</small></button>)}</div></fieldset><fieldset className="subject-set-group"><legend>출제 방식</legend><div className="subject-order-options">{SUBJECT_SET_ORDERS.map((order) => <button type="button" key={order.id} className={`subject-order-option ${setupOrder === order.id ? 'selected' : ''}`} aria-pressed={setupOrder === order.id} onClick={() => setSetupOrder(order.id)}><strong>{order.label}</strong><small>{order.description}</small></button>)}</div></fieldset></div>}
               {setupMode === 'round' && <div className="inline-settings"><label>연도<select value={setupYear} onChange={(event) => { setSetupYear(event.target.value); setSetupRound(''); }}><option value="all">전체 연도</option>{years.filter((year) => scheme === 'legacy' ? year >= 2024 && year <= 2026 : year >= 2027 && year <= 2029).map((year) => <option key={year}>{year}</option>)}</select></label><label>회차<select value={setupRound} onChange={(event) => setSetupRound(event.target.value)}><option value="">전체 회차</option>{rounds.map((round) => <option key={round}>{round}</option>)}</select></label></div>}
               {setupMode === 'book-round' && <div className="inline-settings book-round-settings"><label>책 실전 회차<select value={setupBookRound} onChange={(event) => setSetupBookRound(event.target.value)}>{BOOK_EXAM_ROUNDS.map((round) => <option key={round.round} value={bookRoundKey(round)}>{bookRoundLabel(round)} · {round.count}문항</option>)}</select></label><div className="setup-note">승인된 문항을 책의 원래 순서대로 20문항씩 나눕니다. 원래 번호와 결번을 보존합니다.</div></div>}
               {setupMode !== 'random' && !subjectSetMode && practiceBatchCount(setupPool) > 0 && <div className="inline-settings"><label>20문항 학습 묶음<select value={setupBatch} onChange={(event) => setSetupBatch(Number(event.target.value))}>{Array.from({ length: practiceBatchCount(setupPool) }, (_, index) => <option key={index} value={index}>{index + 1}묶음 · 학습 순서 {index * PRACTICE_BATCH_SIZE + 1}–{Math.min((index + 1) * PRACTICE_BATCH_SIZE, setupPool.length)}</option>)}</select></label><div className="setup-note">마지막 묶음은 남은 문항만 출제합니다. 마지막 문제의 ‘학습 완료’로 결과를 저장할 수 있습니다.</div></div>}

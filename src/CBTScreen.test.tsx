@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CBTScreen } from './App';
+import { CBTScreen, ExitConfirmSheet } from './App';
 import type { ActiveSession, Question, UserData } from './types';
 
 // Synthetic unit fixtures only; these questions are never imported into the app.
@@ -185,5 +185,26 @@ describe('CBT mobile batch progress', () => {
     expect(html).toContain('<div class="cbt-mobile-bar"><span>3 / 3</span>');
     expect(html).toContain('<button aria-label="다음 문제" disabled="">');
     expect(html).toContain('학습 완료');
+  });
+  it('shows the error report control only when a handler is given and marks an open report', () => {
+    const current = question();
+    const plain = render(current, session());
+    expect(plain).not.toContain('report-control');
+    const withReport = (reports: UserData['errorReports']) => renderToStaticMarkup(<CBTScreen question={current} session={session()} questions={[current]}
+      remaining={1_200} user={{ ...user, errorReports: reports }} onAnswer={noAction} onCheck={noAction} onNavigate={noAction}
+      onBookmark={noAction} onMarked={noAction} onSubmit={noAction} onExit={noAction} onReport={noAction}/>);
+    expect(withReport([])).toContain('이 문제 오류 신고');
+    const open = withReport([{ id: 'r1', questionId: current.id, fields: ['prompt'], note: '', context: 'practice', status: 'open', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }]);
+    expect(open).toContain('report-control active');
+    expect(open).toContain('신고됨');
+  });
+
+  it('exit confirmation states saved answers and that the timer keeps running', () => {
+    const html = renderToStaticMarkup(<ExitConfirmSheet session={session({ questionIds: ['a', 'b', 'c'], answers: { a: 1, b: 3 } })} remaining={125} onStay={noAction} onLeave={noAction}/>);
+    expect(html).toContain('role="alertdialog"');
+    expect(html).toContain('3문항 중 2문항');
+    expect(html).toContain('00:02:05');
+    expect(html).toContain('자동으로 제출');
+    expect(html).toContain('계속 풀기');
   });
 });

@@ -8,6 +8,7 @@ import { resolveCbtShortcut, shortcutTargetKind } from './lib/cbtShortcuts';
 import { assignPracticeAnswer, checkPracticeAnswer, supportsPracticeFeedback } from './lib/practiceFeedback';
 import { activateStudySession } from './lib/studySessions';
 import { SERVICE_WORKER_ENABLED } from './lib/runtimeFlags';
+import { ERROR_REPORT_FIELDS, ERROR_REPORT_NOTE_LIMIT, errorReportExport, errorReportFieldLabel, errorReportInputError, openReportFor, removeErrorReport, setErrorReportStatus, upsertErrorReport } from './lib/errorReports';
 import { BookExamImage, BookStoredImage, bookExplanationText } from './BookImages';
 import { ReadableQuestion } from './ReadableQuestion';
 import { ExplanationText } from './ExplanationText';
@@ -17,7 +18,7 @@ import type { ProposalNote } from './BookReviewEditor';
 import { SymbolHintList, SymbolPalette } from './SymbolPalette';
 import PhoneConnect from './PhoneConnect';
 import { EMPTY_USER_DATA, SCHEME_INFO, SUBJECTS } from './constants';
-import type { ActiveSession, Attempt, Question, SchemeId, SessionMode, UserData } from './types';
+import type { ActiveSession, Attempt, ErrorReport, ErrorReportField, Question, SchemeId, SessionMode, UserData } from './types';
 
 type View = 'dashboard' | 'examSetup' | 'cbt' | 'result' | 'mistakes' | 'stats' | 'history' | 'bank' | 'corrections' | 'pdfImport' | 'bookImport' | 'phone' | 'transfer';
 const PdfImporter = lazy(() => import('./PdfImporter'));
@@ -157,6 +158,8 @@ export default function App() {
   const [setupBookRound, setSetupBookRound] = useState('2025:1');
   const [now, setNow] = useState(Date.now());
   const [notice, setNotice] = useState('');
+  const [exitConfirm, setExitConfirm] = useState(false);
+  const [reportTarget, setReportTarget] = useState<{ question: Question; context: ErrorReport['context'] } | null>(null);
 
   useEffect(() => {
     Promise.all([getQuestions(), getUserData()]).then(([bank, saved]) => {
@@ -270,6 +273,22 @@ export default function App() {
   function toggleBookmark(questionId: string) {
     const bookmarks = user.bookmarks.includes(questionId) ? user.bookmarks.filter((id) => id !== questionId) : [...user.bookmarks, questionId];
     void persistUser({ ...user, bookmarks });
+  }
+
+  async function saveErrorReport(target: { question: Question; context: ErrorReport['context'] }, fields: ErrorReportField[], note: string) {
+    const errorReports = upsertErrorReport(user.errorReports, target.question, { fields, note }, target.context, new Date().toISOString(), makeId);
+    await persistUser({ ...user, errorReports });
+    setReportTarget(null);
+    setNotice('오류 신고를 저장했습니다. 문제은행 화면에서 모아 보고 내보낼 수 있습니다.');
+  }
+
+  function changeErrorReportStatus(id: string, status: ErrorReport['status']) {
+    void persistUser({ ...user, errorReports: setErrorReportStatus(user.errorReports, id, status, new Date().toISOString()) });
+  }
+
+  function deleteErrorReport(id: string) {
+    if (!window.confirm('이 오류 신고를 삭제할까요? 삭제한 신고는 되돌릴 수 없습니다.')) return;
+    void persistUser({ ...user, errorReports: removeErrorReport(user.errorReports, id) });
   }
 
   async function beginSession(questionList: Question[], selectedScheme: SchemeId, mode: SessionMode, title: string, minutes: number, feedbackEnabled = true) {
@@ -628,18 +647,20 @@ export default function App() {
         question={currentQuestion} session={session} questions={questions} remaining={remaining} user={user}
         onAnswer={(answer) => answerQuestion(currentQuestion.id, answer)} onCheck={checkCurrentAnswer} onNavigate={moveToQuestion}
         onBookmark={() => toggleBookmark(currentQuestion.id)} onMarked={() => toggleMarked(currentQuestion.id)} onSubmit={requestSubmit}
+        onReport={() => setReportTarget({ question: currentQuestion, context: supportsPracticeFeedback(session) ? 'practice' : 'exam' })}
         readingScale={readingScale} onReadingScale={changeReadingScale} onEdit={() => setShowEditor(currentQuestion)}
-        onExit={() => { setSession(null); setView('dashboard'); }}
+        onExit={() => setExitConfirm(true)}
       />}
       {view === 'cbt' && session && !currentQuestion && <div className="page-content"><p>현재 문제은행에 세션의 문항이 없습니다. 기존 답안과 응시 기록은 보존되어 있습니다.</p><button className="button outline" onClick={() => { setSession(null); setView('bank'); }}>문제은행에서 확인</button></div>}
       {view === 'cbt' && session && currentQuestion && !isBookQuestionEligible(currentQuestion, questions) && <div className="page-content"><p>현재 문항은 수정되었거나 검수가 끝나지 않아 응시 화면에 표시할 수 없습니다. 답안과 응시 기록은 보존되어 있습니다. 원본과 대조해 승인하면 이 자리에서 이어서 풀 수 있습니다.</p><div className="blocked-question-actions"><button className="button primary" onClick={() => void verifyQuestion(currentQuestion)}>{currentQuestion.book ? '원본 대조 검수 열기' : '검수 확인'}</button><button className="button outline" disabled={session.index === 0} onClick={() => moveToQuestion(session.index - 1)}>이전 문제</button><button className="button outline" disabled={session.index >= session.questionIds.length - 1} onClick={() => moveToQuestion(session.index + 1)}>다음 문제</button><button className="button outline" onClick={() => { setSession(null); setView('bank'); }}>문제은행에서 확인</button></div></div>}
       {view === 'cbt' && !session && <div className="page-content"><EmptyState icon="book" title="진행 중인 시험이 없습니다" text="모의시험을 선택해 학습을 시작해 주세요." action="시험 선택" onAction={() => setView('examSetup')}/></div>}
       {view === 'result' && result && <ResultPage attempt={result} questions={questions} onAgain={() => setView('examSetup')} onMistakes={() => setView('mistakes')} onEdit={setShowEditor} />}
-      {view === 'mistakes' && <section className="page-content"><PageHeading eyebrow="복습" title="오답노트" description="최근 제출한 시험의 오답과 미응답을 구분해 모았습니다. 정답으로 다시 제출하면 복습 목록에서 빠집니다." action={<button className="button primary" disabled={!reviewQuestions.length} onClick={() => { setSetupMode('wrong'); setView('examSetup'); }}><Icon name="play"/>오답·미응답 복습</button>}/><div className="collection-summary"><span><strong>{reviewQuestions.length}</strong>개의 복습 대상</span><span>오답 {reviewItems.filter((item) => item.state === 'wrong').length}문항</span><span>미응답 {reviewItems.filter((item) => item.state === 'unanswered').length}문항</span><span>총 응시 {user.attempts.length}회</span></div><QuestionCollection reviewStates={reviewStates} questions={reviewQuestions} allQuestions={questions} scheme={scheme} onBookmark={toggleBookmark} bookmarks={user.bookmarks} onEdit={(question) => { setShowEditor(question); setView('bank'); }}/></section>}
+      {view === 'mistakes' && <section className="page-content"><PageHeading eyebrow="복습" title="오답노트" description="최근 제출한 시험의 오답과 미응답을 구분해 모았습니다. 정답으로 다시 제출하면 복습 목록에서 빠집니다." action={<button className="button primary" disabled={!reviewQuestions.length} onClick={() => { setSetupMode('wrong'); setView('examSetup'); }}><Icon name="play"/>오답·미응답 복습</button>}/><div className="collection-summary"><span><strong>{reviewQuestions.length}</strong>개의 복습 대상</span><span>오답 {reviewItems.filter((item) => item.state === 'wrong').length}문항</span><span>미응답 {reviewItems.filter((item) => item.state === 'unanswered').length}문항</span><span>총 응시 {user.attempts.length}회</span></div><QuestionCollection reviewStates={reviewStates} questions={reviewQuestions} allQuestions={questions} scheme={scheme} onBookmark={toggleBookmark} bookmarks={user.bookmarks} onEdit={(question) => { setShowEditor(question); setView('bank'); }} reportedIds={new Set((user.errorReports ?? []).filter((report) => report.status === 'open').map((report) => report.questionId))} onReport={(question) => setReportTarget({ question, context: 'review' })}/></section>}
       {view === 'stats' && <StatsPage questions={questions} attempts={user.attempts} scheme={scheme} setScheme={setScheme} onHistory={() => setView('history')} />}
       {view === 'history' && <HistoryPage attempts={user.attempts} questions={questions} onBack={() => setView('stats')} />}
       {view === 'bank' && <section className="page-content bank-page"><PageHeading eyebrow="문제 관리" title="문제은행" description="문제를 추가하거나 가져온 뒤 정답·해설·과목을 확인하고 승인하세요. 검수 완료 문제만 출제됩니다." action={<button className="button primary" onClick={() => setShowEditor('new')}><Icon name="plus"/>문제 추가</button>}/>
         <div className="bank-toolbar"><div className="bank-tabs">{(['all', 'verified', 'pending'] as const).map((filter) => <button className={bankFilter === filter ? 'active' : ''} key={filter} onClick={() => setBankFilter(filter)}>{filter === 'all' ? '전체' : filter === 'verified' ? '검수 완료' : '검수 대기'}<span>{filter === 'all' ? questions.length : filter === 'verified' ? verifiedQuestions.length : pendingCount}</span></button>)}</div><label className="bank-subject-filter"><span>과목</span><select value={bankSubjectFilter} onChange={(event) => setBankSubjectFilter(event.target.value)}><option value="all">전체 과목</option>{SUBJECTS.legacy.map((subject) => <option key={subject}>{subject}</option>)}</select></label><label className="bank-symbol-filter"><input type="checkbox" checked={bankAiOnly} onChange={(event) => setBankAiOnly(event.target.checked)}/>AI 대조 승인만 <strong>{aiReviewCount}</strong></label><label className="bank-symbol-filter"><input type="checkbox" checked={bankSymbolOnly} onChange={(event) => setBankSymbolOnly(event.target.checked)}/>기호·오탈자 의심만 <strong>{symbolReviewIds.size}</strong></label><label className="search-field"><Icon name="search" size={17}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="문제·과목 검색" aria-label="문제·과목 검색"/></label><div className="bank-actions"><button className="button outline" onClick={() => go('corrections')}><Icon name="edit"/>교정안 검토</button><button className="button outline" onClick={() => go('bookImport')}>교재 ZIP 가져오기</button><label className="button outline file-button"><Icon name="upload"/>JSON 가져오기<input type="file" accept="application/json,.json" onChange={importQuestionFile}/></label><button className="button outline" onClick={() => exportFile('industrial-safety-question-bank.json', { version: 1, questions })}><Icon name="download"/>내보내기</button></div></div>
+        {Boolean(user.errorReports?.length) && <ErrorReportPanel reports={user.errorReports!} questions={questions} onStatus={changeErrorReportStatus} onDelete={deleteErrorReport} onExport={() => exportFile(`industrial-safety-cbt-error-reports-${new Date().toISOString().slice(0, 10)}.json`, errorReportExport(user.errorReports!, questions, new Date().toISOString()))}/>}
         <div className="bank-backup-actions"><button className="text-button" onClick={() => exportFile('industrial-safety-cbt-backup.json', { version: 1, exportedAt: new Date().toISOString(), questionBank: questions, userData: user })}><Icon name="download" size={15}/>전체 데이터 백업</button><label className="text-button restore-button"><Icon name="upload" size={15}/>백업 복원<input type="file" accept="application/json,.json" onChange={restoreBackup}/></label><span>문제은행과 학습기록을 별도 항목으로 내보냅니다.</span><button className="text-button danger-text" onClick={() => void resetLocalData()}><Icon name="trash" size={15}/>전체 초기화</button></div>
         {questions.length > 0 && <div className="bank-summary"><div><span className="summary-dot green"/>검수 완료 <strong>{verifiedQuestions.length}</strong></div><div><span className="summary-dot amber"/>검수 대기 <strong>{pendingCount}</strong></div><div className="bank-hint">문제 내용은 이 기기의 IndexedDB에 저장됩니다.</div></div>}
         {bankRows.length ? <div className="bank-subject-groups">{(bankSubjectFilter === 'all' ? [...new Set([...SUBJECTS.legacy, ...bankRows.map((question) => subjectFor(question, 'legacy') || question.originalSubject)])] : [bankSubjectFilter]).map((subject) => {
@@ -655,6 +676,8 @@ export default function App() {
     </main>
 
     {view !== 'cbt' && <MobileNavigation view={view} onNavigate={go}/>}
+    {exitConfirm && view === 'cbt' && session && <ExitConfirmSheet session={session} remaining={remaining} onStay={() => setExitConfirm(false)} onLeave={() => { setExitConfirm(false); setSession(null); setView('dashboard'); }}/>}
+    {reportTarget && <ErrorReportSheet key={reportTarget.question.id} question={reportTarget.question} existing={openReportFor(user.errorReports, reportTarget.question.id)} onClose={() => setReportTarget(null)} onSave={(fields, note) => saveErrorReport(reportTarget, fields, note)}/>}
     {showEditor && showEditor !== 'new' && showEditor.book ? <Suspense fallback={<div className="modal-backdrop">검수 화면을 불러오는 중...</div>}><BookReviewEditor key={`${showEditor.id}:${proposal?.question.id === showEditor.id ? 'proposal' : 'saved'}`} question={showEditor} questions={questions} proposal={proposal?.question.id === showEditor.id ? proposal.question : undefined} proposalNotes={proposal?.question.id === showEditor.id ? proposal.notes : undefined} proposeCandidateImage={proposal?.question.id === showEditor.id && proposal.useCandidate} onClose={() => setShowEditor(null)} onSave={saveEditedQuestion} onApprove={approveBookQuestion}/></Suspense> : showEditor && <QuestionEditor key={showEditor === 'new' ? 'new' : showEditor.id} question={showEditor === 'new' ? undefined : showEditor} onClose={() => setShowEditor(null)} onSave={saveEditedQuestion} />}
   </div>;
 }
@@ -757,10 +780,11 @@ function ReadingScaleControl({ value, onChange }: { value: ReadingScale; onChang
   return <div className="reading-scale" role="group" aria-label="본문 글자 크기">{READING_SCALES.map((scale) => <button type="button" key={scale.id} className={`reading-scale-${scale.id} ${value === scale.id ? 'active' : ''}`} aria-pressed={value === scale.id} aria-label={`글자 크기 ${scale.label}`} onClick={() => onChange(scale.id)}>가</button>)}</div>;
 }
 
-export function CBTScreen({ question, session, questions, remaining, user, onAnswer, onCheck, onNavigate, onBookmark, onMarked, onSubmit, onExit, readingScale, onReadingScale, onEdit }: {
+export function CBTScreen({ question, session, questions, remaining, user, onAnswer, onCheck, onNavigate, onBookmark, onMarked, onSubmit, onExit, readingScale, onReadingScale, onEdit, onReport }: {
   question: Question; session: ActiveSession; questions: Question[]; remaining: number; user: UserData; onAnswer: (answer: number) => void; onCheck: () => void; onNavigate: (index: number) => void; onBookmark: () => void; onMarked: () => void; onSubmit: () => void; onExit: () => void;
-  readingScale?: ReadingScale; onReadingScale?: (scale: ReadingScale) => void; onEdit?: () => void;
+  readingScale?: ReadingScale; onReadingScale?: (scale: ReadingScale) => void; onEdit?: () => void; onReport?: () => void;
 }) {
+  const isReported = Boolean(openReportFor(user.errorReports, question.id));
   const answeredCount = Object.keys(session.answers).length;
   const questionNo = question.book?.originalNumber ?? session.index + 1;
   const sourceNumber = (id: string, index: number) => questions.find((item) => item.id === id)?.book?.originalNumber ?? index + 1;
@@ -831,7 +855,7 @@ export function CBTScreen({ question, session, questions, remaining, user, onAns
     <div className={`cbt-content ${practiceLayout ? 'practice-layout' : ''}`}><div className="cbt-question-column" ref={questionTop}>
       <div className="question-topline"><div><span className="question-label">QUESTION</span><strong>{String(questionNo).padStart(2, '0')} <i>진행 {session.index + 1} / {session.questionIds.length}</i></strong></div><span className="question-tags"><span>{subjectFor(question, session.scheme) || question.originalSubject}</span>{(question.year || question.round) && <span>{question.year ? `${question.year}년 ` : ''}{question.round}</span>}</span></div>
       <div className="exam-question-card">
-        <div className="exam-question-tools"><span>문제 {questionNo}</span>{readingScale && onReadingScale && <ReadingScaleControl value={readingScale} onChange={onReadingScale}/>}<button className={`bookmark-control ${isBookmarked ? 'active' : ''}`} onClick={onBookmark}><Icon name="bookmark" size={17}/>{isBookmarked ? '북마크됨' : '북마크'}</button></div>
+        <div className="exam-question-tools"><span>문제 {questionNo}</span>{readingScale && onReadingScale && <ReadingScaleControl value={readingScale} onChange={onReadingScale}/>}<button className={`bookmark-control ${isBookmarked ? 'active' : ''}`} onClick={onBookmark}><Icon name="bookmark" size={17}/>{isBookmarked ? '북마크됨' : '북마크'}</button>{onReport && <button className={`report-control ${isReported ? 'active' : ''}`} onClick={onReport} aria-haspopup="dialog" aria-label={isReported ? '오류 신고 수정' : '이 문제 오류 신고'}><Icon name="warning" size={16}/>{isReported ? '신고됨' : '오류 신고'}</button>}</div>
         <ReadableQuestion text={question.prompt}/>
         {question.book ? <BookExamImage question={question}/> : question.imageDataUrl && <img className="question-image" src={question.imageDataUrl} alt="문제 이미지"/>}
         <div className="answer-options">{question.choices.map((choice, index) => {
@@ -934,9 +958,9 @@ function originalExplanationProps(question: Question) {
   return question.book ? { originalImageId: question.book.reviewImageId, originalMultiline: question.explanation.split(/\r?\n/).length >= 4 } : {};
 }
 
-export function QuestionCollection({ questions, allQuestions, scheme, onBookmark, bookmarks, onEdit, reviewStates }: { questions: Question[]; allQuestions: Question[]; scheme: SchemeId; onBookmark: (id: string) => void; bookmarks: string[]; onEdit: (question: Question) => void; reviewStates?: ReadonlyMap<string, ReviewState> }) {
+export function QuestionCollection({ questions, allQuestions, scheme, onBookmark, bookmarks, onEdit, reviewStates, onReport, reportedIds }: { questions: Question[]; allQuestions: Question[]; scheme: SchemeId; onBookmark: (id: string) => void; bookmarks: string[]; onEdit: (question: Question) => void; reviewStates?: ReadonlyMap<string, ReviewState>; onReport?: (question: Question) => void; reportedIds?: ReadonlySet<string> }) {
   if (!questions.length) return <EmptyState icon="check" title="복습할 오답·미응답이 없어요" text="시험을 제출하면 오답과 미응답을 이곳에서 다시 풀 수 있습니다."/>;
-  return <div className="collection-list">{questions.map((question, index) => <article className="collection-card" key={question.id}><div className="collection-number">{String(index + 1).padStart(2, '0')}</div><div className="collection-body"><div className="collection-meta"><span>{subjectFor(question, scheme) || question.originalSubject}</span>{reviewStates?.has(question.id) && <span className={`review-state ${reviewStates.get(question.id)}`}>{reviewStates.get(question.id) === 'unanswered' ? '미응답' : '오답'}</span>}{(question.year || question.round) && <span>{question.year ? `${question.year}년 ` : ''}{question.round}</span>}</div><ReadableQuestion text={question.prompt} as="h3"/>{question.book ? <BookExamImage question={question}/> : question.imageDataUrl && <img className="question-image small" src={question.imageDataUrl} alt="문제 이미지"/>}<div className="collection-answer"><span>정답 {question.answer}번</span><span>{question.answer == null ? '정답 검수 필요' : question.choices[question.answer - 1]}</span></div>{(question.explanation || question.book) && <ReviewExplanation text={bookExplanationText(question, allQuestions)} {...originalExplanationProps(question)}/>}</div><div className="collection-tools"><button className={`icon-button ${bookmarks.includes(question.id) ? 'bookmarked' : ''}`} onClick={() => onBookmark(question.id)} aria-label="북마크"><Icon name="bookmark"/></button><button className="icon-button" onClick={() => onEdit(question)} aria-label="문제 수정" title="지문·보기·해설 수정"><Icon name="edit"/></button></div></article>)}</div>;
+  return <div className="collection-list">{questions.map((question, index) => <article className="collection-card" key={question.id}><div className="collection-number">{String(index + 1).padStart(2, '0')}</div><div className="collection-body"><div className="collection-meta"><span>{subjectFor(question, scheme) || question.originalSubject}</span>{reviewStates?.has(question.id) && <span className={`review-state ${reviewStates.get(question.id)}`}>{reviewStates.get(question.id) === 'unanswered' ? '미응답' : '오답'}</span>}{(question.year || question.round) && <span>{question.year ? `${question.year}년 ` : ''}{question.round}</span>}</div><ReadableQuestion text={question.prompt} as="h3"/>{question.book ? <BookExamImage question={question}/> : question.imageDataUrl && <img className="question-image small" src={question.imageDataUrl} alt="문제 이미지"/>}<div className="collection-answer"><span>정답 {question.answer}번</span><span>{question.answer == null ? '정답 검수 필요' : question.choices[question.answer - 1]}</span></div>{(question.explanation || question.book) && <ReviewExplanation text={bookExplanationText(question, allQuestions)} {...originalExplanationProps(question)}/>}</div><div className="collection-tools"><button className={`icon-button ${bookmarks.includes(question.id) ? 'bookmarked' : ''}`} onClick={() => onBookmark(question.id)} aria-label="북마크"><Icon name="bookmark"/></button>{onReport && <button className={`icon-button ${reportedIds?.has(question.id) ? 'reported' : ''}`} onClick={() => onReport(question)} aria-haspopup="dialog" aria-label={reportedIds?.has(question.id) ? '오류 신고 수정' : '오류 신고'} title="오류 신고"><Icon name="warning"/></button>}<button className="icon-button" onClick={() => onEdit(question)} aria-label="문제 수정" title="지문·보기·해설 수정"><Icon name="edit"/></button></div></article>)}</div>;
 }
 
 function StatsPage({ questions, attempts, scheme, setScheme, onHistory }: { questions: Question[]; attempts: Attempt[]; scheme: SchemeId; setScheme: (scheme: SchemeId) => void; onHistory: () => void }) {
@@ -1010,6 +1034,107 @@ function QuestionEditor({ question, onClose, onSave }: { question?: Question; on
   }
 
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><section className="editor-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title"><div className="editor-header"><div><span className="eyebrow">문제 검수</span><h2 id="editor-title">{question ? '문제 수정 및 재검수' : '새 문제 추가'}</h2></div><button className="icon-button" onClick={requestClose} aria-label="닫기"><Icon name="close"/></button></div><div className="editor-callout"><Icon name="shield" size={17}/><p>저장 후 <strong>검수 대기</strong>로 등록됩니다. 답과 해설을 확인한 뒤 검수 완료를 눌러주세요.</p></div><form onSubmit={submit} className="editor-form" ref={form}><div className="editor-grid three"><label>연도 <span className="optional">선택</span><input type="number" min="1900" max="2099" value={year} onChange={(event) => setYear(event.target.value)} placeholder="연도 미분류"/></label><label>회차 <span className="optional">선택</span><input value={round} onChange={(event) => setRound(event.target.value)} placeholder="회차 미분류"/></label><label>출처 쪽수<input type="number" min="1" value={sourcePage} onChange={(event) => setSourcePage(event.target.value)} placeholder="선택 사항"/></label></div><label>원본 과목 <span className="required">필수</span><select value={originalSubject} onChange={(event) => setOriginalSubject(event.target.value)}>{SUBJECTS.legacy.map((subject) => <option key={subject}>{subject}</option>)}</select><small>기출 당시의 과목을 보존합니다.</small></label><label>2027 개정 과목 <span className="optional">재분류 완료 시 입력</span><select value={currentSubject} onChange={(event) => setCurrentSubject(event.target.value)}><option value="">미분류 · 개정 시험에 미출제</option>{SUBJECTS.revised.map((subject) => <option key={subject}>{subject}</option>)}</select><small>공식 개정 과목 기준으로 확인한 경우에만 선택하세요.</small></label><SymbolPalette scope={form}/><SymbolHintList hints={symbolHints({ prompt, choices, explanation })}/><label>문제 내용 <span className="required">필수</span><textarea rows={3} data-symbol-field="문제 내용" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="문제 내용을 입력하세요."/></label><div className="choices-editor"><span className="editor-label">보기 <span className="required">4개 필수</span></span>{choices.map((choice, index) => <label className="choice-input" key={index}><span>{index + 1}</span><textarea rows={1} data-symbol-field={`보기 ${index + 1}`} aria-label={`보기 ${index + 1} 내용`} value={choice} onChange={(event) => setChoices((items) => items.map((item, i) => i === index ? event.target.value : item))} placeholder={`${index + 1}번 보기`}/><input className="answer-radio" type="radio" name="answer" checked={answer === index + 1} onChange={() => setAnswer(index + 1)} aria-label={`${index + 1}번 정답 선택`}/></label>)}</div><label>해설 <span className="required">필수</span><textarea rows={3} data-symbol-field="해설" value={explanation} onChange={(event) => setExplanation(event.target.value)} placeholder="정답 근거와 풀이를 입력하세요."/></label><div className="editor-grid"><label>자료 출처<input value={source} onChange={(event) => setSource(event.target.value)} placeholder="예: 산업안전기사 필기 기출문제집"/></label><label>문제 이미지 <span className="optional">5MB 이하</span><input type="file" accept="image/*" onChange={(event) => void onImage(event)}/></label></div>{imageDataUrl && <div className="image-preview"><img src={imageDataUrl} alt="첨부한 문제"/><button type="button" className="icon-button danger" onClick={() => setImageDataUrl('')}><Icon name="trash"/></button></div>}{error && <p className="form-error" role="alert">{error}</p>}<div className="editor-footer"><button type="button" className="button outline" onClick={requestClose}>취소</button><button className="button primary" type="submit">검수 대기로 저장 <Icon name="arrow" size={16}/></button></div></form></section></div>;
+}
+
+/** Confirm before leaving a running set. States what is kept and that the timer keeps running; no guilt-trip copy. */
+export function ExitConfirmSheet({ session, remaining, onStay, onLeave }: { session: ActiveSession; remaining: number; onStay: () => void; onLeave: () => void }) {
+  const stayRef = useRef<HTMLButtonElement>(null);
+  const stayCallback = useRef(onStay);
+  stayCallback.current = onStay;
+  useEffect(() => {
+    stayRef.current?.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); stayCallback.current(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+  const answered = Object.keys(session.answers).length;
+  const total = session.questionIds.length;
+  return <div className="modal-backdrop sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onStay(); }}>
+    <section className="report-sheet exit-sheet" role="alertdialog" aria-modal="true" aria-labelledby="exit-title" aria-describedby="exit-detail" onKeyDown={(event) => event.stopPropagation()}>
+      <span className="sheet-handle" aria-hidden="true"/>
+      <h2 id="exit-title">학습을 잠시 나갈까요?</h2>
+      <div className="exit-progress" aria-hidden="true"><span style={{ width: `${total ? answered / total * 100 : 0}%` }}/></div>
+      <ul id="exit-detail" className="exit-facts">
+        <li><strong>{total}문항 중 {answered}문항</strong>에 답했고, 답안은 이 기기에 저장되어 있습니다.</li>
+        <li>대시보드의 <strong>진행 중</strong> 배너에서 이어 풀 수 있습니다.</li>
+        <li>남은 시간 <strong>{formatClock(remaining)}</strong>은 나가 있는 동안에도 줄어들고, 0이 되면 자동으로 제출됩니다.</li>
+      </ul>
+      <div className="editor-footer"><button type="button" className="button outline" onClick={onLeave}>나가기</button><button type="button" ref={stayRef} className="button primary" onClick={onStay}>계속 풀기</button></div>
+    </section>
+  </div>;
+}
+
+function questionLabel(question: Question): string {
+  const subject = question.currentSubject || question.originalSubject;
+  const number = question.book?.originalNumber;
+  return [subject, number != null ? `${number}번` : '', question.book?.originalId ?? ''].filter(Boolean).join(' · ');
+}
+
+/** Bottom sheet for reporting a question error. Shows the question text only; never the answer or the answer-bearing review image. */
+export function ErrorReportSheet({ question, existing, onClose, onSave }: { question: Question; existing?: ErrorReport; onClose: () => void; onSave: (fields: ErrorReportField[], note: string) => Promise<void> | void }) {
+  const [fields, setFields] = useState<ErrorReportField[]>(existing?.fields ?? []);
+  const [note, setNote] = useState(existing?.note ?? '');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    noteRef.current?.focus({ preventScroll: true });
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); closeRef.current(); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+  function toggle(field: ErrorReportField) {
+    setError('');
+    setFields((current) => current.includes(field) ? current.filter((item) => item !== field) : [...current, field]);
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const problem = errorReportInputError(fields, note);
+    if (problem) { setError(problem); return; }
+    setSaving(true);
+    try { await onSave(fields, note); } catch { setError('저장하지 못했습니다. 다시 시도해 주세요.'); setSaving(false); }
+  }
+  const excerpt = question.prompt.replace(/\s+/g, ' ').trim();
+  return <div className="modal-backdrop sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="report-sheet" role="dialog" aria-modal="true" aria-labelledby="report-title" aria-describedby="report-target" onKeyDown={(event) => event.stopPropagation()}>
+      <span className="sheet-handle" aria-hidden="true"/>
+      <div className="editor-header"><div><span className="eyebrow">문제 오류 신고</span><h2 id="report-title">{existing ? '신고 내용 수정' : '어디가 잘못됐나요?'}</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="닫기"><Icon name="close"/></button></div>
+      <div className="report-target" id="report-target"><strong>{questionLabel(question)}</strong><p>{excerpt.length > 90 ? `${excerpt.slice(0, 90)}…` : excerpt}</p></div>
+      <form onSubmit={submit} className="report-form">
+        <fieldset className="report-fields"><legend>오류 위치 <span className="optional">여러 개 선택 가능</span></legend>
+          <div>{ERROR_REPORT_FIELDS.map((field) => <button type="button" key={field.value} className={`report-chip ${fields.includes(field.value) ? 'selected' : ''}`} aria-pressed={fields.includes(field.value)} onClick={() => toggle(field.value)}>{fields.includes(field.value) && <Icon name="check" size={13}/>}{field.label}</button>)}</div>
+        </fieldset>
+        <label className="report-note">내용 <span className="optional">원본과 다른 글자, 빠진 기호 등</span>
+          <textarea ref={noteRef} value={note} maxLength={ERROR_REPORT_NOTE_LIMIT} rows={4} placeholder="예: 보기 ③의 '□'가 'ㅁ'으로 보입니다." onChange={(event) => { setNote(event.target.value); setError(''); }}/>
+          <small className="report-count" aria-live="polite">{note.length} / {ERROR_REPORT_NOTE_LIMIT}자</small>
+        </label>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <p className="report-hint">신고는 이 기기의 학습기록에 저장되고, 기기 이전·전체 백업에 함께 담깁니다. 문제 내용은 바뀌지 않습니다.</p>
+        <div className="editor-footer"><button type="button" className="button outline" onClick={onClose}>취소</button><button type="submit" className="button primary" disabled={saving}>{saving ? '저장 중…' : existing ? '수정 저장' : '신고 저장'}</button></div>
+      </form>
+    </section>
+  </div>;
+}
+
+export function ErrorReportPanel({ reports, questions, onStatus, onDelete, onExport }: { reports: ErrorReport[]; questions: Question[]; onStatus: (id: string, status: ErrorReport['status']) => void; onDelete: (id: string) => void; onExport: () => void }) {
+  const [showResolved, setShowResolved] = useState(false);
+  const byId = useMemo(() => new Map(questions.map((question) => [question.id, question])), [questions]);
+  const open = reports.filter((report) => report.status === 'open');
+  const visible = [...(showResolved ? reports : open)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return <section className="report-panel" aria-labelledby="report-panel-title">
+    <header><div><h2 id="report-panel-title"><Icon name="warning" size={16}/>오류 신고</h2><span>처리 전 <strong>{open.length}</strong>건 · 전체 {reports.length}건</span></div><div className="report-panel-actions"><label className="report-toggle"><input type="checkbox" checked={showResolved} onChange={(event) => setShowResolved(event.target.checked)}/>처리 완료 포함</label><button className="button outline" onClick={onExport}><Icon name="download" size={15}/>JSON 내보내기</button></div></header>
+    {visible.length ? <ul className="report-list">{visible.map((report) => {
+      const question = byId.get(report.questionId);
+      return <li key={report.id} className={report.status === 'resolved' ? 'resolved' : ''}>
+        <div className="report-item-head"><strong>{question ? questionLabel(question) : `삭제된 문항 · ${report.originalId ?? report.questionId}`}</strong><time dateTime={report.updatedAt}>{report.updatedAt.slice(0, 10)}</time></div>
+        {report.fields.length > 0 && <div className="report-item-fields">{report.fields.map((field) => <span key={field}>{errorReportFieldLabel(field)}</span>)}</div>}
+        {report.note && <p>{report.note}</p>}
+        <div className="report-item-actions">{report.status === 'open' ? <button className="text-button" onClick={() => onStatus(report.id, 'resolved')}><Icon name="check" size={14}/>처리 완료</button> : <button className="text-button" onClick={() => onStatus(report.id, 'open')}>다시 열기</button>}<button className="text-button danger-text" onClick={() => onDelete(report.id)}><Icon name="trash" size={14}/>삭제</button></div>
+      </li>;
+    })}</ul> : <p className="report-empty">처리할 신고가 없습니다.</p>}
+  </section>;
 }
 
 function EmptyState({ icon, title, text, action, onAction }: { icon: string; title: string; text: string; action?: string; onAction?: () => void }) {

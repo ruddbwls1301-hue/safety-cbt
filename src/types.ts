@@ -152,10 +152,24 @@ export type ActiveSession = {
   pausedAt?: number;
 };
 
+export type ErrorReportField = 'prompt' | 'choices' | 'answer' | 'explanation' | 'symbol' | 'image' | 'other';
+export type ErrorReport = {
+  id: string;
+  questionId: string;
+  originalId?: string;
+  fields: ErrorReportField[];
+  note: string;
+  context: 'practice' | 'exam' | 'review';
+  status: 'open' | 'resolved';
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type UserData = {
   key: 'state';
   attempts: Attempt[];
   bookmarks: string[];
+  errorReports?: ErrorReport[];
   activeSession?: ActiveSession;
   savedSessions?: ActiveSession[];
   theme: 'light' | 'dark';
